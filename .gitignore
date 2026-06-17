@@ -1,0 +1,7 @@
+# Nothing personal or downloaded should ever be committed here.
+backup/
+payload/
+_recon/
+*.bak
+*.zip
+*.log
