@@ -145,22 +145,43 @@ Set-Content -Path (Join-Path $Win64 "ue4ss\Mods\FOVControl\fov.txt") -Value ([st
 # --- set resolution -----------------------------------------------------------
 if (-not $SkipResolution) {
     if ($ResX -le 0 -or $ResY -le 0) {
+        # Detect the PHYSICAL native resolution of the PRIMARY monitor. The process
+        # must be made DPI-aware FIRST, otherwise Screen.Bounds returns DPI-scaled
+        # (logical) pixels - e.g. 1536x960 instead of 1920x1200 at 125% scaling.
         try {
+            try {
+                Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class UWDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }
+"@
+            } catch {}
+            try { [void][UWDpi]::SetProcessDPIAware() } catch {}
+
             Add-Type -AssemblyName System.Windows.Forms
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $ResX = $b.Width; $ResY = $b.Height
+            $ResX = [int]$b.Width; $ResY = [int]$b.Height
+
+            # fallback to the active display mode if Screen detection came up empty
+            if ($ResX -le 0 -or $ResY -le 0) {
+                $vc = Get-CimInstance Win32_VideoController -ErrorAction Stop |
+                      Where-Object { $_.CurrentHorizontalResolution } | Select-Object -First 1
+                if ($vc) { $ResX = [int]$vc.CurrentHorizontalResolution; $ResY = [int]$vc.CurrentVerticalResolution }
+            }
         } catch { Warn "Could not detect native resolution; pass -ResX/-ResY. Skipping resolution."; $ResX = 0 }
     }
     if ($ResX -gt 0 -and $ResY -gt 0) {
         $cfgDir = Join-Path $env:LOCALAPPDATA "Chameleon\Saved\Config\Windows"
         $cfg = Join-Path $cfgDir "GameUserSettings.ini"
         New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-        if (-not (Test-Path $cfg)) {
-            @("[/Script/Engine.GameUserSettings]") | Set-Content -Path $cfg -Encoding UTF8
-        } else {
+        if (Test-Path $cfg) {
             Copy-Item $cfg "$cfg.preUW.bak" -Force
+        } else {
+            New-Item -ItemType File -Force -Path $cfg | Out-Null
         }
-        $lines = Get-Content $cfg
+
+        $headerLine = "[/Script/Engine.GameUserSettings]"
+        $headerRx   = '^\s*\[/Script/Engine\.GameUserSettings\]\s*$'
         $kv = [ordered]@{
             "ResolutionSizeX"                  = $ResX
             "ResolutionSizeY"                  = $ResY
@@ -169,17 +190,59 @@ if (-not $SkipResolution) {
             "FullscreenMode"                   = $FullscreenMode
             "LastConfirmedFullscreenMode"      = $FullscreenMode
         }
-        foreach ($key in $kv.Keys) {
-            $rx = "^(?i)$([regex]::Escape($key))="
-            if ($lines -match $rx) {
-                $lines = $lines -replace ($rx + ".*"), "$key=$($kv[$key])"
-            } else {
-                $idx = ($lines | Select-String -Pattern '^\[/Script/Engine\.GameUserSettings\]' | Select-Object -First 1).LineNumber
-                if ($idx) { $lines = $lines[0..($idx-1)] + "$key=$($kv[$key])" + $lines[$idx..($lines.Count-1)] }
-                else { $lines += "$key=$($kv[$key])" }
+
+        # @(...) forces an array even for a 1-line file. A bare Get-Content on a
+        # single-line file returns a STRING; the old code's slice $lines[0..(idx-1)]
+        # then indexed the string's CHARACTERS, shredding the section header into
+        # "[", "/", "[" and breaking the whole .ini.
+        $lines = @(Get-Content -LiteralPath $cfg)
+
+        $hasHeader = $false
+        foreach ($l in $lines) { if ($l -match $headerRx) { $hasHeader = $true; break } }
+
+        $out = New-Object System.Collections.Generic.List[string]
+        if (-not $hasHeader) {
+            # No valid header (fresh / empty / previously-corrupted): write a clean
+            # section at the top, then keep any leftover NON-key lines so our keys
+            # are never stranded under a malformed section.
+            $out.Add($headerLine)
+            foreach ($key in $kv.Keys) { $out.Add("$key=$($kv[$key])") }
+            foreach ($line in $lines) {
+                $isOurKey = $false
+                foreach ($key in $kv.Keys) {
+                    if ($line -match "^(?i)\s*$([regex]::Escape($key))\s*=") { $isOurKey = $true; break }
+                }
+                if (-not $isOurKey) { $out.Add($line) }
+            }
+        } else {
+            # Valid header present: replace our keys in place, insert any missing
+            # ones right after the header, and drop duplicate key lines.
+            $exists = @{}
+            foreach ($key in $kv.Keys) {
+                $krx = "^(?i)\s*$([regex]::Escape($key))\s*="
+                foreach ($l in $lines) { if ($l -match $krx) { $exists[$key] = $true; break } }
+            }
+            $written = @{}
+            $insertedMissing = $false
+            foreach ($line in $lines) {
+                $replaced = $false
+                foreach ($key in $kv.Keys) {
+                    if ($line -match "^(?i)\s*$([regex]::Escape($key))\s*=") {
+                        if (-not $written[$key]) { $out.Add("$key=$($kv[$key])"); $written[$key] = $true }
+                        $replaced = $true; break
+                    }
+                }
+                if (-not $replaced) { $out.Add($line) }
+                if ((-not $insertedMissing) -and ($line -match $headerRx)) {
+                    foreach ($key in $kv.Keys) { if (-not $exists[$key]) { $out.Add("$key=$($kv[$key])") } }
+                    $insertedMissing = $true
+                }
             }
         }
-        Set-Content -Path $cfg -Value $lines
+
+        # UTF-8 without BOM (what Unreal writes); avoids the PS 5.1 Set-Content
+        # BOM/ANSI inconsistency the old code had.
+        [System.IO.File]::WriteAllLines($cfg, $out, (New-Object System.Text.UTF8Encoding($false)))
         Ok "Resolution set to ${ResX}x${ResY}, FullscreenMode=$FullscreenMode"
         Warn "The game rewrites this file on exit. If it reverts, also set it from the in-game menu (only edit while the game is closed)."
     }
