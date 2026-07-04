@@ -54,7 +54,7 @@ if (Test-Path $proxy) { Remove-Item $proxy -Force; Ok "dwmapi.dll removed." } el
 if (Test-Path $ue4ss) { Remove-Item $ue4ss -Recurse -Force; Ok "ue4ss\ removed." } else { Warn "ue4ss\ absent." }
 
 $bak = Join-Path $Win64 "dwmapi.dll.preUW.bak"
-if (Test-Path $bak) { Copy-Item $bak $proxy -Force; Ok "Restored the original dwmapi.dll." }
+if (Test-Path $bak) { Copy-Item $bak $proxy -Force; Remove-Item $bak -Force; Ok "Restored the original dwmapi.dll." }
 
 Ok "Uninstall complete. The game is back to its original state."
 Write-Host "Note: your resolution in GameUserSettings.ini was not reverted; change it in the in-game menu if needed."

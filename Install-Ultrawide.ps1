@@ -32,6 +32,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"   # PS 5.1's progress bar slows Invoke-WebRequest downloads drastically
+# GitHub requires TLS 1.2+; old Windows 10 / .NET defaults may not offer it
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 $H = @{ "User-Agent" = "MecchaChameleon-Ultrawide-Installer" }
 
 function Info($m){ Write-Host "[install] $m" -ForegroundColor Cyan }
@@ -85,14 +88,29 @@ if (Get-Process -Name "PenguinHotel-Win64-Shipping" -ErrorAction SilentlyContinu
 }
 
 # --- download + install UE4SS (MIT, official) --------------------------------
-$ue4ssFallback = "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/experimental-latest/UE4SS_v3.0.1-970-gbdef46ff.zip"
-$ue4ssUrl = $ue4ssFallback
+# 'experimental-latest' is a ROLLING tag: its assets are replaced on every build,
+# so no hardcoded asset URL stays valid. Resolve the current name via the GitHub
+# API, or scrape the release page when the API is unavailable (e.g. rate-limited).
+$ue4ssUrl = $null
 try {
     Info "Resolving the current UE4SS build (experimental-latest, UE5.6 capable)..."
     $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/UE4SS-RE/RE-UE4SS/releases/tags/experimental-latest" -Headers $H -TimeoutSec 30
     $a = $rel.assets | Where-Object { $_.name -match '^UE4SS_v.*\.zip$' -and $_.name -notmatch 'zDEV|zCustom|zMap' } | Select-Object -First 1
     if ($a) { $ue4ssUrl = $a.browser_download_url; Info "UE4SS asset: $($a.name)" }
-} catch { Warn "GitHub API unreachable, using fallback UE4SS URL." }
+} catch { Warn "GitHub API unreachable, falling back to the release page." }
+if (-not $ue4ssUrl) {
+    try {
+        $html = (Invoke-WebRequest -Uri "https://github.com/UE4SS-RE/RE-UE4SS/releases/expanded_assets/experimental-latest" -Headers $H -TimeoutSec 30 -UseBasicParsing).Content
+        # '/UE4SS_v' anchored right after a slash skips the zDEV-UE4SS_... debug asset
+        $m = [regex]::Match($html, 'href="([^"]*/releases/download/[^"]*/UE4SS_v[^"/]*\.zip)"')
+        if ($m.Success) {
+            $ue4ssUrl = $m.Groups[1].Value
+            if ($ue4ssUrl -notmatch '^https?://') { $ue4ssUrl = "https://github.com$ue4ssUrl" }
+            Info "UE4SS asset (release page): $(Split-Path $ue4ssUrl -Leaf)"
+        }
+    } catch {}
+}
+if (-not $ue4ssUrl) { Die "Could not resolve the UE4SS download (GitHub API and release page both unreachable). Check your connection and re-run." }
 
 $tmp = Join-Path $env:TEMP ("mc_uw_" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -108,14 +126,23 @@ if (-not $proxy) { Die "dwmapi.dll not found inside the UE4SS archive." }
 $ue4ssSrc = Join-Path $proxy.DirectoryName "ue4ss"
 if (-not (Test-Path $ue4ssSrc)) { Die "ue4ss\ folder not found next to dwmapi.dll in the UE4SS archive." }
 
-# back up a pre-existing proxy dll if any
-if (Test-Path (Join-Path $Win64 "dwmapi.dll")) {
+# back up a pre-existing proxy dll if any; first backup wins, since on a re-run
+# the current dwmapi.dll is our own proxy and must not clobber the original
+if ((Test-Path (Join-Path $Win64 "dwmapi.dll")) -and -not (Test-Path (Join-Path $Win64 "dwmapi.dll.preUW.bak"))) {
     Copy-Item (Join-Path $Win64 "dwmapi.dll") (Join-Path $Win64 "dwmapi.dll.preUW.bak") -Force
     Warn "Existing dwmapi.dll backed up to dwmapi.dll.preUW.bak"
 }
 Info "Installing UE4SS into the game..."
 Copy-Item $proxy.FullName (Join-Path $Win64 "dwmapi.dll") -Force
-Copy-Item $ue4ssSrc (Join-Path $Win64 "ue4ss") -Recurse -Force
+$ue4ssDst = Join-Path $Win64 "ue4ss"
+if (Test-Path $ue4ssDst) {
+    # copying the folder onto an existing one would nest it (ue4ss\ue4ss) and update
+    # nothing; merge the contents instead so a re-run really refreshes UE4SS while
+    # keeping anything else the user added under ue4ss\ (extra mods, logs)
+    Copy-Item (Join-Path $ue4ssSrc "*") $ue4ssDst -Recurse -Force
+} else {
+    Copy-Item $ue4ssSrc $ue4ssDst -Recurse -Force
+}
 Ok "UE4SS installed"
 
 # --- download FOVControl + UE5.6 signature fix (by Amikiir) -------------------
@@ -126,6 +153,11 @@ New-Item -ItemType Directory -Force -Path $modScripts, $sigDir | Out-Null
 
 Info "Downloading FOVControl (by Amikiir) + UE5.6 signature fix..."
 $mainLua = Join-Path $modScripts "main.lua"
+if (Test-Path $mainLua) {
+    # same convention as dwmapi.dll: never destroy a possibly locally-edited file
+    Copy-Item $mainLua "$mainLua.preUW.bak" -Force
+    Warn "Existing main.lua backed up to main.lua.preUW.bak (re-apply local edits if you had any)."
+}
 Invoke-WebRequest -Uri "$fovBase/FOVControl/Scripts/main.lua" -Headers $H -OutFile $mainLua -TimeoutSec 60
 Invoke-WebRequest -Uri "$fovBase/UE4SS_Signatures/StaticConstructObject.lua" -Headers $H -OutFile (Join-Path $sigDir "StaticConstructObject.lua") -TimeoutSec 60
 Set-Content -Path (Join-Path $Win64 "ue4ss\Mods\FOVControl\enabled.txt") -Value "" -NoNewline
