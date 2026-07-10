@@ -171,6 +171,151 @@ if (-not $KeepF7) {
     if ($n -ne $c) { Set-Content -Path $mainLua -Value $n -NoNewline; Info "Removed the redundant F7 hotkey (use -KeepF7 to keep it)." }
 }
 
+# --- spectator/death-cam FOV fix (local edit, not redistributed) ---------------
+# Upstream FOVControl v3.7 bails out of ApplyFOV when no pawn is possessed and
+# never touches the view target's camera, so spectating another player renders at
+# the game's baked-in narrow FOV (zoomed-in, huge character). Extend the freshly
+# downloaded main.lua: no early return, push the FOV into the view target's camera
+# component too, and re-apply whenever the view target changes. Exact-anchor
+# replacement: if upstream changes and the anchors no longer match, warn and keep
+# the unpatched (still functional) mod instead of failing the install.
+$specOld = @'
+local function ApplyFOV(verbose)
+    local ok, err = pcall(function()
+        local pc = GetLocalPlayerController()
+        if not pc or not pc:IsValid() then return end
+        local pawn = pc.Pawn
+        if not pawn or not pawn:IsValid() then return end
+
+        -- the pawn's camera variable is 'FirstPersonCamera' (inherited from
+        -- BP_FirstPersonCharacter_Main; confirmed from the class field list)
+        local cam = pawn.FirstPersonCamera
+        if cam and cam:IsValid() then cam:SetFieldOfView(CurrentFOV) end
+
+        -- PlayerCameraManager.DefaultFOV is the FOV authority when the view
+        -- target has no camera component (cLeon pawns). Plain float write (safe);
+        -- deliberately NOT SetFOV/LockedFOV, which would break photo zoom.
+        pcall(function()
+            local cm = pc.PlayerCameraManager
+            if cm and cm:IsValid() then cm.DefaultFOV = CurrentFOV end
+        end)
+
+        -- keep the game's camera-animation component in sync so its
+        -- animations blend back to our FOV instead of the game default
+        local cma = pawn.BPC_CameraMoveAnimation
+        if cma and cma:IsValid() then cma.DefaultFOV = CurrentFOV end
+
+        if verbose then Log("FOV applied: %.0f", CurrentFOV) end
+    end)
+    if not ok and verbose then Log("apply failed: %s", tostring(err)) end
+end
+'@
+$specNew = @'
+local function ApplyFOV(verbose)
+    local ok, err = pcall(function()
+        local pc = GetLocalPlayerController()
+        if not pc or not pc:IsValid() then return end
+
+        -- own pawn - may be absent while dead/spectating, so no early return:
+        -- the camera-manager and view-target paths below must still run
+        local pawn = pc.Pawn
+        if pawn and pawn:IsValid() then
+            -- the pawn's camera variable is 'FirstPersonCamera' (inherited from
+            -- BP_FirstPersonCharacter_Main; confirmed from the class field list)
+            local cam = pawn.FirstPersonCamera
+            if cam and cam:IsValid() then cam:SetFieldOfView(CurrentFOV) end
+
+            -- keep the game's camera-animation component in sync so its
+            -- animations blend back to our FOV instead of the game default
+            local cma = pawn.BPC_CameraMoveAnimation
+            if cma and cma:IsValid() then cma.DefaultFOV = CurrentFOV end
+        end
+
+        -- PlayerCameraManager.DefaultFOV is the FOV authority when the view
+        -- target has no camera component (cLeon pawns). Plain float write (safe);
+        -- deliberately NOT SetFOV/LockedFOV, which would break photo zoom.
+        pcall(function()
+            local cm = pc.PlayerCameraManager
+            if cm and cm:IsValid() then cm.DefaultFOV = CurrentFOV end
+        end)
+
+        -- SPECTATOR/DEATH CAM: when viewing another actor, ITS camera component
+        -- wins over DefaultFOV and still carries the baked-in narrow FOV, so the
+        -- spectated view stays zoomed. Push our FOV into the view target's camera
+        -- too (client-side, view-only - nothing replicates).
+        pcall(function()
+            local vt = nil
+            pcall(function() vt = pc:GetViewTarget() end)
+            if not (vt and vt:IsValid()) then
+                pcall(function() vt = pc.PlayerCameraManager.ViewTarget.Target end)
+            end
+            if vt and vt:IsValid() then
+                local vcam = vt.FirstPersonCamera
+                if vcam and vcam:IsValid() then
+                    vcam:SetFieldOfView(CurrentFOV)
+                else
+                    -- generic fallback: any camera component on the view target
+                    local camClass = StaticFindObject("/Script/Engine.CameraComponent")
+                    if camClass and camClass:IsValid() then
+                        local comp = vt:GetComponentByClass(camClass)
+                        if comp and comp:IsValid() then comp:SetFieldOfView(CurrentFOV) end
+                    end
+                end
+            end
+        end)
+
+        if verbose then Log("FOV applied: %.0f", CurrentFOV) end
+    end)
+    if not ok and verbose then Log("apply failed: %s", tostring(err)) end
+end
+'@
+$hookOld = @'
+-- reapply whenever the player (re)possesses a pawn: spawn, respawn, level load
+RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self)
+    ApplyBurst()
+end)
+'@
+$hookNew = @'
+-- reapply whenever the player (re)possesses a pawn: spawn, respawn, level load
+RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self)
+    ApplyBurst()
+end)
+
+-- MecchaChameleon-Ultrawide local patch: reapply when the view target changes
+-- (death cam, spectating another player) - the burst also covers blend time
+local okSpec = pcall(function()
+    RegisterHook("/Script/Engine.PlayerController:ClientSetViewTarget", function(self)
+        ApplyBurst()
+    end)
+end)
+if okSpec then
+    Log("spectator FOV patch active")
+else
+    Log("spectator hook unavailable - view-target FOV still applied on possess/slider")
+end
+'@
+
+# ReadAllText/WriteAllText: UTF-8 (no BOM) on both PS 5.1 and 7+, unlike Set-Content
+$lua = [System.IO.File]::ReadAllText($mainLua)
+$applied = 0
+foreach ($pair in @(,@($specOld, $specNew)) + @(,@($hookOld, $hookNew))) {
+    # here-strings carry this .ps1's CRLF; retry with the file's other EOL style
+    foreach ($eol in @("`r`n", "`n")) {
+        $o = $pair[0].Replace("`r`n", "`n").Replace("`n", $eol)
+        if ($lua.Contains($o)) {
+            $lua = $lua.Replace($o, $pair[1].Replace("`r`n", "`n").Replace("`n", $eol))
+            $applied++
+            break
+        }
+    }
+}
+if ($applied -eq 2) {
+    [System.IO.File]::WriteAllText($mainLua, $lua, (New-Object System.Text.UTF8Encoding($false)))
+    Ok "Spectator/death-cam FOV fix applied."
+} else {
+    Warn "Spectator FOV fix skipped ($applied/2 anchors matched - upstream main.lua changed?). FOV still works while playing; the spectator view may stay zoomed."
+}
+
 # starting FOV for the first launch
 Set-Content -Path (Join-Path $Win64 "ue4ss\Mods\FOVControl\fov.txt") -Value ([string]$DefaultFov) -NoNewline
 

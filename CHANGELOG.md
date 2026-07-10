@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-07-11
+
+### Fixed
+- **Spectator / death-cam view is no longer zoomed in.** FOVControl v3.7 bails
+  out of its FOV apply when no pawn is possessed and never touches the view
+  target's camera, so spectating another player rendered at the game's baked-in
+  narrow FOV (huge, zoomed-in character). The installer now extends the
+  downloaded `main.lua` locally (same convention as the F7 edit): the FOV is
+  also pushed into the current view target's camera component, and a
+  `ClientSetViewTarget` hook re-applies it whenever the view target changes.
+  The UE4SS console prints `[FOVControl] spectator FOV patch active` when the
+  patch is in effect. If upstream `main.lua` changes and the patch anchors no
+  longer match, the installer warns and continues with the unpatched mod
+  instead of failing.
+
 ## [1.0.2] - 2026-07-04
 
 ### Fixed
@@ -56,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fullscreen via `GameUserSettings.ini`. No game files are modified, and a full
   uninstall is supported.
 
+[1.0.3]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Shayano/MecchaChameleon-Ultrawide/releases/tag/v1.0.0

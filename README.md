@@ -54,6 +54,8 @@ The script will:
 - locate your MECCHA CHAMELEON install via Steam (or pass `-GameRoot "<path>"`),
 - download UE4SS (the official current build that supports UE5.6),
 - download FOVControl and its UE5.6 signature fix from Amikiir's repo,
+- extend it locally so the FOV also applies to the spectator / death cam
+  (upstream only widens your own first-person camera),
 - install everything into the game's `Binaries\Win64`,
 - set your resolution to your monitor's native resolution in fullscreen
   (override with `-ResX` / `-ResY`, or set `-FullscreenMode 0|1|2`).
