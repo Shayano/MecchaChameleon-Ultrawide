@@ -36,6 +36,19 @@ function Find-GameRoot {
     return $null
 }
 
+# The UE4SS proxy contains 'ue4ss' strings (ASCII and UTF-16); the game ships no
+# dwmapi.dll of its own. Detects backups that a pre-v1.0.2 re-run poisoned with
+# our own proxy: "restoring" those leaves a proxy with no ue4ss\ folder and the
+# game errors at launch ("Failed to load UE4SS.dll").
+function Test-Ue4ssProxy([string]$path) {
+    try {
+        $b = [System.IO.File]::ReadAllBytes($path)
+        if ([System.Text.Encoding]::ASCII.GetString($b) -match 'ue4ss') { return $true }
+        if ([System.Text.Encoding]::Unicode.GetString($b) -match 'ue4ss') { return $true }
+    } catch {}
+    return $false
+}
+
 if (-not $GameRoot) { $GameRoot = Find-GameRoot }
 if (-not $GameRoot) { Die "Could not find the game. Re-run with -GameRoot `"<path>`"" }
 $Win64 = Join-Path $GameRoot "Chameleon\Binaries\Win64"
@@ -54,7 +67,15 @@ if (Test-Path $proxy) { Remove-Item $proxy -Force; Ok "dwmapi.dll removed." } el
 if (Test-Path $ue4ss) { Remove-Item $ue4ss -Recurse -Force; Ok "ue4ss\ removed." } else { Warn "ue4ss\ absent." }
 
 $bak = Join-Path $Win64 "dwmapi.dll.preUW.bak"
-if (Test-Path $bak) { Copy-Item $bak $proxy -Force; Remove-Item $bak -Force; Ok "Restored the original dwmapi.dll." }
+if (Test-Path $bak) {
+    if (Test-Ue4ssProxy $bak) {
+        Remove-Item $bak -Force
+        Ok "Discarded dwmapi.dll.preUW.bak (it was our own proxy, not a game file)."
+    } else {
+        Copy-Item $bak $proxy -Force; Remove-Item $bak -Force
+        Ok "Restored the original dwmapi.dll."
+    }
+}
 
 Ok "Uninstall complete. The game is back to its original state."
 Write-Host "Note: your resolution in GameUserSettings.ini was not reverted; change it in the in-game menu if needed."

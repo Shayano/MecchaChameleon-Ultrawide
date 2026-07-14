@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-07-11
+
+### Fixed
+- **Uninstall no longer leaves the game failing to launch with a "Failed to
+  load UE4SS.dll" error.** Re-runs of pre-1.0.2 installers could overwrite
+  `dwmapi.dll.preUW.bak` with our own proxy DLL; uninstall then "restored" that
+  proxy while removing `ue4ss\`, so the game loaded a proxy with nothing left
+  to load. Both scripts now detect whether a file is the UE4SS proxy (the game
+  ships no `dwmapi.dll` of its own): uninstall discards such a backup instead
+  of restoring it, and the installer purges stale poisoned backups and never
+  backs up its own proxy. If an older uninstall already broke your game,
+  re-running this uninstaller (or deleting `dwmapi.dll` from
+  `Chameleon\Binaries\Win64`) fixes it.
+
+### Changed
+- README wording: the unmodded game never shows black bars on ultrawide; it
+  fills the panel but zoomed in. Clarified that the FOV slider turns that
+  magnification into real field of view.
+
 ## [1.0.3] - 2026-07-11
 
 ### Fixed
@@ -71,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fullscreen via `GameUserSettings.ini`. No game files are modified, and a full
   uninstall is supported.
 
+[1.0.4]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.0...v1.0.1

@@ -27,8 +27,10 @@ On a wide screen the game looks zoomed in / cropped. Things worth knowing:
   exactly what **FOVControl** (by Amikiir) does, via **UE4SS**. This repo just
   automates installing them and sets your resolution.
 
-Result: **Hor+** ("horizontal plus") - you keep the vertical view and gain more
-on the sides, filling the whole ultrawide panel with no black bars and no zoom.
+Result: **Hor+** ("horizontal plus") - you keep the vertical view and gain real
+image on the sides. Note the unmodded game never letterboxes: it already fills
+the whole panel, just zoomed in. The slider turns that magnification into
+actual field of view.
 
 ---
 

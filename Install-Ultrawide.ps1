@@ -72,6 +72,19 @@ function Find-GameRoot {
     return $null
 }
 
+# The UE4SS proxy contains 'ue4ss' strings (ASCII and UTF-16); the game ships no
+# dwmapi.dll of its own. Used to avoid ever backing up our own proxy as if it were
+# an original game file (pre-v1.0.2 re-runs did exactly that, and uninstall then
+# "restored" a proxy with no ue4ss\ folder, breaking the game launch).
+function Test-Ue4ssProxy([string]$path) {
+    try {
+        $b = [System.IO.File]::ReadAllBytes($path)
+        if ([System.Text.Encoding]::ASCII.GetString($b) -match 'ue4ss') { return $true }
+        if ([System.Text.Encoding]::Unicode.GetString($b) -match 'ue4ss') { return $true }
+    } catch {}
+    return $false
+}
+
 if (-not $GameRoot) {
     Info "Locating MECCHA CHAMELEON via Steam..."
     $GameRoot = Find-GameRoot
@@ -127,9 +140,17 @@ $ue4ssSrc = Join-Path $proxy.DirectoryName "ue4ss"
 if (-not (Test-Path $ue4ssSrc)) { Die "ue4ss\ folder not found next to dwmapi.dll in the UE4SS archive." }
 
 # back up a pre-existing proxy dll if any; first backup wins, since on a re-run
-# the current dwmapi.dll is our own proxy and must not clobber the original
-if ((Test-Path (Join-Path $Win64 "dwmapi.dll")) -and -not (Test-Path (Join-Path $Win64 "dwmapi.dll.preUW.bak"))) {
-    Copy-Item (Join-Path $Win64 "dwmapi.dll") (Join-Path $Win64 "dwmapi.dll.preUW.bak") -Force
+# the current dwmapi.dll is our own proxy and must not clobber the original.
+# Never keep or create a backup of the UE4SS proxy itself: pre-v1.0.2 re-runs
+# poisoned .bak with our own proxy, and uninstall then "restored" it.
+$dwm    = Join-Path $Win64 "dwmapi.dll"
+$dwmBak = Join-Path $Win64 "dwmapi.dll.preUW.bak"
+if ((Test-Path $dwmBak) -and (Test-Ue4ssProxy $dwmBak)) {
+    Remove-Item $dwmBak -Force
+    Warn "Discarded a stale dwmapi.dll.preUW.bak (it was our own proxy, not an original file)."
+}
+if ((Test-Path $dwm) -and -not (Test-Path $dwmBak) -and -not (Test-Ue4ssProxy $dwm)) {
+    Copy-Item $dwm $dwmBak -Force
     Warn "Existing dwmapi.dll backed up to dwmapi.dll.preUW.bak"
 }
 Info "Installing UE4SS into the game..."
