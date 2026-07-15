@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-07-11
+
+### Fixed
+- **The Field of View row no longer vanishes from the settings menu.** The row
+  was injected only when the settings page object was first created, in a
+  single attempt 250 ms later: if that attempt ran before the page's scroll box
+  existed (slow loads), or if the page later rebuilt its row list (tab
+  switches, settings reset), the row was gone until the game was restarted.
+  Injection is now retried across the page's construction window
+  (250/800/1600/3000 ms) and a 1-second watchdog re-adds the row if the page
+  wiped it.
+- **The FOV no longer randomly stops applying until the menu is reopened.**
+  Re-application only ran on possess/view-target events with a 2-second burst,
+  so level loads longer than that (and other game-side resets) left the camera
+  at the stock FOV. The same watchdog now quietly re-asserts the configured
+  FOV every second. The game's own camera animations and photo zoom still take
+  precedence while they are active.
+- Scripted view targets (fixed cutscene / scripted-shot cameras) keep their
+  designed FOV: the spectator FOV push now only targets pawns.
+- The F7-hotkey edit now reads/writes `main.lua` as UTF-8 explicitly, so the
+  file's non-ASCII comment bytes survive on non-Western Windows locales under
+  PowerShell 5.1.
+
 ## [1.0.4] - 2026-07-11
 
 ### Fixed
@@ -90,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fullscreen via `GameUserSettings.ini`. No game files are modified, and a full
   uninstall is supported.
 
+[1.0.5]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Shayano/MecchaChameleon-Ultrawide/compare/v1.0.1...v1.0.2

@@ -175,7 +175,8 @@ New-Item -ItemType Directory -Force -Path $modScripts, $sigDir | Out-Null
 Info "Downloading FOVControl (by Amikiir) + UE5.6 signature fix..."
 $mainLua = Join-Path $modScripts "main.lua"
 if (Test-Path $mainLua) {
-    # same convention as dwmapi.dll: never destroy a possibly locally-edited file
+    # keep the pre-run state; most recent backup wins here, unlike dwmapi.dll's
+    # first-backup-wins (that one preserves an original the game never re-creates)
     Copy-Item $mainLua "$mainLua.preUW.bak" -Force
     Warn "Existing main.lua backed up to main.lua.preUW.bak (re-apply local edits if you had any)."
 }
@@ -187,19 +188,25 @@ Ok "FOVControl + signature fix installed"
 
 # optional: remove the redundant F7 're-apply' hotkey (local edit, not redistributed)
 if (-not $KeepF7) {
-    $c = Get-Content -Raw $mainLua
+    # UTF-8 explicitly: PS 5.1's default Get/Set-Content round-trips main.lua's
+    # non-ASCII comment bytes through the ANSI code page (mangled on non-Western locales)
+    $c = [System.IO.File]::ReadAllText($mainLua)
     $n = [regex]::Replace($c, '(?m)^(\s*)RegisterKeyBind\(Key\.F7,.*$', '$1-- F7 re-apply hotkey removed by MecchaChameleon-Ultrawide setup')
-    if ($n -ne $c) { Set-Content -Path $mainLua -Value $n -NoNewline; Info "Removed the redundant F7 hotkey (use -KeepF7 to keep it)." }
+    if ($n -ne $c) { [System.IO.File]::WriteAllText($mainLua, $n, (New-Object System.Text.UTF8Encoding($false))); Info "Removed the redundant F7 hotkey (use -KeepF7 to keep it)." }
 }
 
-# --- spectator/death-cam FOV fix (local edit, not redistributed) ---------------
-# Upstream FOVControl v3.7 bails out of ApplyFOV when no pawn is possessed and
-# never touches the view target's camera, so spectating another player renders at
-# the game's baked-in narrow FOV (zoomed-in, huge character). Extend the freshly
-# downloaded main.lua: no early return, push the FOV into the view target's camera
-# component too, and re-apply whenever the view target changes. Exact-anchor
-# replacement: if upstream changes and the anchors no longer match, warn and keep
-# the unpatched (still functional) mod instead of failing the install.
+# --- spectator FOV fix + reliability patches (local edits, not redistributed) --
+# Three exact-anchor patches on the freshly downloaded main.lua; if upstream
+# changes and an anchor stops matching, the remaining patches still apply and a
+# warning is printed instead of failing the install.
+#   1. ApplyFOV: no early return without a pawn, and push the FOV into the view
+#      target's camera too - fixes the zoomed spectator/death cam.
+#   2. Hooks: re-apply on view-target changes, plus a 1s watchdog that quietly
+#      re-asserts the FOV (covers loads longer than the possess burst and other
+#      game-side resets) and re-adds the settings row if the page wiped it.
+#   3. Slider injection: remember the page and retry across its construction
+#      window - a single 250ms attempt could run before ScrollBox_0 existed,
+#      leaving no FOV row until the next game restart.
 $specOld = @'
 local function ApplyFOV(verbose)
     local ok, err = pcall(function()
@@ -275,11 +282,21 @@ local function ApplyFOV(verbose)
                 if vcam and vcam:IsValid() then
                     vcam:SetFieldOfView(CurrentFOV)
                 else
-                    -- generic fallback: any camera component on the view target
-                    local camClass = StaticFindObject("/Script/Engine.CameraComponent")
-                    if camClass and camClass:IsValid() then
-                        local comp = vt:GetComponentByClass(camClass)
-                        if comp and comp:IsValid() then comp:SetFieldOfView(CurrentFOV) end
+                    -- generic fallback: any camera component on the view target,
+                    -- but ONLY for pawns (spectated players / spectator pawns).
+                    -- Scripted view targets (fixed cutscene or scripted-shot
+                    -- camera actors) keep their designed FOV.
+                    local isPawn = false
+                    pcall(function()
+                        local pawnClass = StaticFindObject("/Script/Engine.Pawn")
+                        isPawn = pawnClass and pawnClass:IsValid() and vt:IsA(pawnClass)
+                    end)
+                    if isPawn then
+                        local camClass = StaticFindObject("/Script/Engine.CameraComponent")
+                        if camClass and camClass:IsValid() then
+                            local comp = vt:GetComponentByClass(camClass)
+                            if comp and comp:IsValid() then comp:SetFieldOfView(CurrentFOV) end
+                        end
                     end
                 end
             end
@@ -314,12 +331,92 @@ if okSpec then
 else
     Log("spectator hook unavailable - view-target FOV still applied on possess/slider")
 end
+
+-- MecchaChameleon-Ultrawide local patch: 1-second watchdog.
+-- * Quietly re-asserts the FOV: covers level loads longer than the possess
+--   burst and any game-side reset, so the value no longer unsticks until the
+--   menu is reopened. The game's own camera animations still win while they
+--   play (they write per tick and blend back to our DefaultFOV), and photo /
+--   zoom features go through the camera manager's locked FOV, which overrides
+--   these writes anyway.
+-- * Heals the settings slider: if the page rebuilt its row list (tab switch,
+--   settings reset) and wiped the injected row, it is re-added within a second
+--   instead of staying gone until the next game restart.
+local function UW_SliderState(page)
+    local hasScroll, hasSlider = false, false
+    pcall(function()
+        local scroll = page.ScrollBox_0
+        if not (scroll and scroll:IsValid()) then return end
+        hasScroll = true
+        for i = 0, scroll:GetChildrenCount() - 1 do
+            local child = scroll:GetChildAt(i)
+            pcall(function()
+                if child.SaveValueKey:ToString() == "FOV" then hasSlider = true end
+            end)
+            if hasSlider then break end
+        end
+    end)
+    return hasScroll, hasSlider
+end
+
+LoopAsync(1000, function()
+    ExecuteInGameThread(function()
+        pcall(function()
+            ApplyFOV(false)
+            local page = UW_LastPage
+            if page and page:IsValid() then
+                local hasScroll, hasSlider = UW_SliderState(page)
+                if hasScroll and not hasSlider then
+                    RegisterSliderHooks() -- no-op once registered
+                    InjectSlider(page)
+                end
+            end
+        end)
+    end)
+    return false
+end)
+Log("FOV watchdog active (1s)")
+'@
+
+$pageOld = @'
+local okNotify, errNotify = pcall(function()
+    NotifyOnNewObject(PAGE_CLASS_PATH, function(page)
+        ExecuteWithDelay(250, function()
+            ExecuteInGameThread(function()
+                RegisterSliderHooks()
+                InjectSlider(page)
+            end)
+        end)
+    end)
+end)
+'@
+$pageNew = @'
+local okNotify, errNotify = pcall(function()
+    NotifyOnNewObject(PAGE_CLASS_PATH, function(page)
+        -- MecchaChameleon-Ultrawide local patch: remember the page for the
+        -- watchdog, and retry the injection - a single 250ms attempt can run
+        -- before ScrollBox_0 exists on slow loads (InjectSlider is idempotent,
+        -- so extra attempts are no-ops once the row is in).
+        UW_LastPage = page
+        for i, ms in ipairs({ 250, 800, 1600, 3000 }) do
+            ExecuteWithDelay(ms, function()
+                ExecuteInGameThread(function()
+                    -- hooks once per page open (upstream cadence): the retries
+                    -- exist for the widget, so a partial hook-registration
+                    -- failure is not re-attempted 4x per open
+                    if i == 1 then RegisterSliderHooks() end
+                    InjectSlider(page)
+                end)
+            end)
+        end
+    end)
+end)
 '@
 
 # ReadAllText/WriteAllText: UTF-8 (no BOM) on both PS 5.1 and 7+, unlike Set-Content
 $lua = [System.IO.File]::ReadAllText($mainLua)
 $applied = 0
-foreach ($pair in @(,@($specOld, $specNew)) + @(,@($hookOld, $hookNew))) {
+foreach ($pair in @(,@($specOld, $specNew)) + @(,@($hookOld, $hookNew)) + @(,@($pageOld, $pageNew))) {
     # here-strings carry this .ps1's CRLF; retry with the file's other EOL style
     foreach ($eol in @("`r`n", "`n")) {
         $o = $pair[0].Replace("`r`n", "`n").Replace("`n", $eol)
@@ -330,11 +427,15 @@ foreach ($pair in @(,@($specOld, $specNew)) + @(,@($hookOld, $hookNew))) {
         }
     }
 }
-if ($applied -eq 2) {
+# the three patches are independent and each is safe alone, so a partial apply
+# is still strictly better than none (the watchdog guards UW_LastPage being nil)
+if ($applied -gt 0) {
     [System.IO.File]::WriteAllText($mainLua, $lua, (New-Object System.Text.UTF8Encoding($false)))
-    Ok "Spectator/death-cam FOV fix applied."
+}
+if ($applied -eq 3) {
+    Ok "Spectator FOV fix + reliability patches applied."
 } else {
-    Warn "Spectator FOV fix skipped ($applied/2 anchors matched - upstream main.lua changed?). FOV still works while playing; the spectator view may stay zoomed."
+    Warn "FOV patches: only $applied/3 anchors matched (upstream main.lua changed?). The mod still works, but some fixes (spectator FOV, slider self-heal, FOV watchdog) are missing."
 }
 
 # starting FOV for the first launch
