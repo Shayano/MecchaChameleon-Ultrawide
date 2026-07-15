@@ -75,8 +75,9 @@ Useful options:
 
 ## Usage
 
-1. Launch MECCHA CHAMELEON from Steam. A small UE4SS console window opens next to
-   it (this is normal). It should print `[FOVControl] ... loaded`.
+1. Launch MECCHA CHAMELEON from Steam. UE4SS runs invisibly in the background
+   (no window); if you ever need to check it, it writes a log to
+   `Chameleon\Binaries\Win64\ue4ss\UE4SS.log`.
 2. Check the resolution in the in-game settings (native, fullscreen).
 3. Go to **Settings -> General -> Field of View** and set the slider to taste.
    For 32:9, somewhere around **110-120** is a good start.

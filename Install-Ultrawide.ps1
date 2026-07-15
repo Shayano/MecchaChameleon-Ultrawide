@@ -564,7 +564,7 @@ if (-not $allOk) { Die "Installation incomplete (see above)." }
 Ok "Done."
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
-Write-Host "  1. Launch MECCHA CHAMELEON from Steam (a UE4SS console opens alongside)."
+Write-Host "  1. Launch MECCHA CHAMELEON from Steam."
 Write-Host "  2. Settings -> General -> Field of View: set the slider to taste (~110-120 for 32:9)."
 Write-Host "     Set it from the slider at least once so the game saves it."
 Write-Host "  3. First run: test offline / in a private session."
