@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "secret-santa",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "kv_namespaces": [
+    // Pas besoin d'id : "wrangler deploy" crée automatiquement l'espace KV au premier déploiement.
+    { "binding": "SANTA" }
+  ]
+}
